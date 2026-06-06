@@ -10,6 +10,19 @@ personalized outreach to connectors (recruiters, hiring managers, career-service
 staff, community organizers), and plan distribution channels — getting blocked on
 geo-restrictions and asking a human for local contacts when needed.
 
+## Two implementations
+
+| Directory | Stack | Deploy target |
+|---|---|---|
+| **`web/`** | **Next.js + TypeScript** (UI + API + agents in one app) | **Vercel** (single platform) — see [`web/README.md`](web/README.md) |
+| `backend/` + `frontend/` | FastAPI (Python) + worker + React/Vite | Railway / Render / Fly.io (Python web + worker + Postgres) |
+
+For a single-platform Vercel deployment, use **`web/`** — it ports the entire
+system (screening, outreach, channel block/unblock, memory, approvals) and
+replaces the polling worker with serverless atomic-claim processing
+(`after()` + Vercel Cron + frontend poll). The Python version below remains for
+reference / non-serverless hosting.
+
 ## Three Agents
 
 | Agent | Role | Behaviour |
