@@ -10,18 +10,10 @@ personalized outreach to connectors (recruiters, hiring managers, career-service
 staff, community organizers), and plan distribution channels — getting blocked on
 geo-restrictions and asking a human for local contacts when needed.
 
-## Two implementations
-
-| Directory | Stack | Deploy target |
-|---|---|---|
-| **`web/`** | **Next.js + TypeScript** (UI + API + agents in one app) | **Vercel** (single platform) — see [`web/README.md`](web/README.md) |
-| `backend/` + `frontend/` | FastAPI (Python) + worker + React/Vite | Railway / Render / Fly.io (Python web + worker + Postgres) |
-
-For a single-platform Vercel deployment, use **`web/`** — it ports the entire
-system (screening, outreach, channel block/unblock, memory, approvals) and
-replaces the polling worker with serverless atomic-claim processing
-(`after()` + Vercel Cron + frontend poll). The Python version below remains for
-reference / non-serverless hosting.
+The app lives in **[`web/`](web/)** — a single-platform **Next.js + TypeScript**
+app (UI + API + agents in one codebase) that deploys to **Vercel** with no extra
+infrastructure. See **[`web/README.md`](web/README.md)** for full deploy and local
+dev instructions.
 
 ## Three Agents
 
@@ -33,103 +25,71 @@ reference / non-serverless hosting.
 
 ## Stack
 
-- **Frontend:** React + Vite + Tailwind CSS
-- **Backend:** FastAPI (Python)
-- **Database:** PostgreSQL
-- **Agents:** Claude API (`claude-sonnet-4-20250514`) or NVIDIA NIM (Llama / Nemotron)
+- **Framework:** Next.js (App Router) + React + TypeScript + Tailwind CSS
+- **Database:** PostgreSQL (Vercel Postgres / Neon in production)
+- **Agents:** NVIDIA NIM (Llama / Nemotron) or Claude API — with an offline mock
+- **Hosting:** Vercel (single platform)
 
 ## LLM providers
 
-The agents pick a provider at startup (priority order):
+Agents pick a provider at startup (priority order):
 
 1. **Anthropic / Claude** — set `ANTHROPIC_API_KEY` (model `CLAUDE_MODEL`,
-   default `claude-sonnet-4-20250514`). Uses the `anthropic` SDK.
+   default `claude-sonnet-4-20250514`), via the `@anthropic-ai/sdk`.
 2. **NVIDIA NIM** — set `NVIDIA_API_KEY` (model `NVIDIA_MODEL`, default
    `meta/llama-3.3-70b-instruct`). NVIDIA's endpoint
    (`https://integrate.api.nvidia.com/v1`) is **OpenAI-compatible** and hosts
-   Llama / Nemotron models — **not** Claude — so it's used via the `openai`
-   SDK pointed at that base URL.
-3. **Offline MOCK mode** — if neither key is set, deterministic offline
-   responses in `backend/agents/mock.py` produce the exact JSON each agent
-   expects, so the full coordination loop (screening, blocking, human unblock,
-   memory, approvals) is demoable without a key or network.
+   Llama / Nemotron models — **not** Claude — so it's used via the `openai` SDK.
+3. **Offline MOCK mode** — if neither key is set, deterministic responses in
+   `web/lib/mock.ts` produce the exact JSON each agent expects, so the full
+   coordination loop (screening, blocking, human unblock, memory, approvals) is
+   demoable without a key or network.
 
-The worker prints the active provider on startup, e.g.
-`mode=LIVE nvidia (meta/llama-3.3-70b-instruct)`. Configure everything in
-`backend/.env` (copy from `.env.example`); the file is gitignored so keys are
-never committed.
+Set keys as Vercel **Environment Variables** (or `web/.env.local` for local dev).
 
-## Run
-
-### 1. Database (PostgreSQL)
+## Quick start (local)
 
 ```bash
-# create the database (tables are auto-created by SQLAlchemy on startup)
-createdb agentos
-# or use the bundled schema.sql for reference
-```
-
-Configure the connection in `backend/.env` (copy from `.env.example`):
-
-```
-DATABASE_URL=postgresql://daytona:daytona@localhost:5432/agentos
-```
-
-### 2. Backend (FastAPI + worker)
-
-```bash
-cd backend
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-
-# Terminal 1 — API
-uvicorn main:app --reload --port 8000
-
-# Terminal 2 — agent worker (polls BACKLOG tasks every 3s)
-python worker.py
-```
-
-### 3. Frontend (Vite)
-
-```bash
-cd frontend
+cd web
 npm install
-npm run dev   # http://localhost:5173
+cp .env.example .env.local   # set DATABASE_URL (+ optional NVIDIA_API_KEY)
+npm run dev                  # http://localhost:3000
 ```
 
-The frontend auto-detects the backend: `localhost:8000` locally, or the matching
-proxied host when served behind a port-prefixed proxy.
+Tables are created automatically on first request — no migration step.
 
 ## How it flows
 
-1. **Submit an application** (Applications tab) → a `agent_screening` task is
-   queued.
-2. The **worker** picks it up, the Screening Agent scores it, sets the
-   application status, and writes to **agent memory** (`total_screened`, common
-   rejection reason).
+1. **Submit a candidate application** (Applications tab) → an `agent_screening`
+   task is queued.
+2. The serverless **`tick()`** worker picks it up, the Screening Agent scores it,
+   sets the application status, and writes to **agent memory**.
 3. `MAYBE` results land in `WAITING_APPROVAL` for a human decision in the UI.
 4. **Create a task** for the Outreach or Channel agent (Tasks tab / Kanban).
-5. The **Channel Agent** blocks on geo-restrictions and asks for a local
-   contact. Respond in the modal → the worker saves the contact to memory,
-   resets the task, and the agent **retries** successfully.
+5. The **Channel Agent** blocks on geo-restrictions and asks for a local contact.
+   Respond in the modal → the contact is saved to memory, the task resets, and
+   the agent **retries** successfully.
 6. Watch everything in the **Timeline** (activity log) and **Memory** tabs.
 
 ## Layout
 
 ```
-backend/
-  main.py            FastAPI app + routers
-  database.py        SQLAlchemy engine/session
-  models.py          ORM models (applications, tasks, activity_logs, agent_memory)
-  schema.sql         reference DDL
-  routers/           tasks, applications, logs, memory
-  agents/
-    base_agent.py    memory, logging, task updates, Claude call (+ mock fallback)
-    mock.py          offline Claude stand-in
-    screening_agent.py
-    outreach_agent.py
-    channel_agent.py
-  worker.py          polling loop that drives the agents
-frontend/
-  src/App.jsx        Applications + Tasks (Kanban) + Timeline + Memory views
+web/
+  app/
+    page.tsx                 UI — Applications + Tasks (Kanban) + Timeline + Memory
+    layout.tsx, globals.css
+    api/                     route handlers
+      applications/          GET list, POST submit, [id]/decide
+      tasks/                 GET list, POST create, [id]/respond
+      logs/  memory/         GET
+      cron/tick/             serverless worker entrypoint
+  lib/
+    agents.ts                screening / outreach / channel + tick() processor
+    llm.ts                   provider selection (Anthropic > NVIDIA > mock)
+    mock.ts                  offline LLM stand-in
+    db.ts                    postgres.js client + idempotent schema bootstrap
+  vercel.json                cron config (/api/cron/tick every minute)
 ```
+
+See **[`web/README.md`](web/README.md)** for how the polling worker is replaced by
+serverless atomic-claim processing and how to deploy to Vercel.
